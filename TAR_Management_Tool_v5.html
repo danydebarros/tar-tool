@@ -366,7 +366,7 @@ function offlinePayload(){
 }
 
 function fetchLive(url){
-  setStatus('loading','Fetching live data…');
+  setStatus('loading','Fetching live data… (may take 20-40 seconds for large datasets)');
   // JSONP with cache-bust timestamp
   var cbName='_tarCb'+Date.now();
   var script=document.createElement('script');
@@ -375,7 +375,7 @@ function fetchLive(url){
     if(done)return; done=true;
     delete window[cbName]; try{document.body.removeChild(script);}catch(e){}
     setStatus('offline','Timed out — using offline data'); loadData(offlinePayload());
-  },20000);
+  },60000);
   window[cbName]=function(data){
     if(done)return; done=true;
     clearTimeout(timeout); delete window[cbName];
@@ -983,15 +983,15 @@ function connectLive(){
   if(!url||url.indexOf('https://script.google.com')<0){
     document.getElementById('connect-status').innerHTML='<div class="status-bar err">Please enter a valid Apps Script URL.</div>';return;
   }
-  document.getElementById('connect-status').innerHTML='<div class="status-bar loading">Connecting…</div>';
+  document.getElementById('connect-status').innerHTML='<div class="status-bar loading">Connecting… this may take 20-40 seconds for large datasets. Please wait.</div>';
   localStorage.setItem('tar_url',url); liveUrl=url;
   var cbName='_tarConnect'+Date.now();
   var script=document.createElement('script');
   var done=false;
   var timeout=setTimeout(function(){
     if(done)return;done=true;delete window[cbName];try{document.body.removeChild(script);}catch(e){}
-    document.getElementById('connect-status').innerHTML='<div class="status-bar err">Timed out. Check URL and Anyone access.</div>';
-  },20000);
+    document.getElementById('connect-status').innerHTML='<div class="status-bar err">Timed out after 60 seconds. Check URL and Anyone access.</div>';
+  },60000);
   window[cbName]=function(data){
     if(done)return;done=true;clearTimeout(timeout);delete window[cbName];try{document.body.removeChild(script);}catch(e){}
     if(data.error){document.getElementById('connect-status').innerHTML='<div class="status-bar err">Sheet error: '+data.error+'</div>';return;}
