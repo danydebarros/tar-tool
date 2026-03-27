@@ -179,7 +179,6 @@ tr.selected td{background:#EEF5FD}
       <table><thead><tr>
         <th>Resource</th><th style="text-align:right">WOs</th><th style="text-align:right">Activities</th>
         <th style="text-align:right">Plan hrs</th><th style="text-align:right">Actual hrs</th>
-        <th style="text-align:right">Peak headcount</th>
         <th style="text-align:center">Near-crit</th><th>Load</th>
       </tr></thead><tbody id="res-tbody"></tbody></table>
     </div>
@@ -434,15 +433,7 @@ function loadData(payload){
   document.getElementById('badge-nc').textContent=nc+' near-critical';
   document.getElementById('badge-ur').textContent=ur+' unresourced';
 
-  // Rebuild chart points fully from live scurve if available
-  var pts=CHART_DATA.map(function(p){return Object.assign({},p);});
-  if(scurve&&scurve.points){
-    scurve.points.forEach(function(lp){
-      var p=null; for(var i=0;i<pts.length;i++) if(pts[i].date===lp.date){p=pts[i];break;}
-      if(p){p.actual_lh=lp.actual_lh||0;p.actual_acts=lp.actual_acts||0;p.actual_cp=lp.actual_cp||0;}
-    });
-  }
-  // Rebuild ALL charts from live data
+  // Build all charts from live activity data
   computeLiveCharts();
   buildSCStats(); renderSC(activeSC);
   renderResHistogram();
@@ -454,16 +445,10 @@ function buildResData(){
   allWO.forEach(function(wo){
     (wo.acts||[]).forEach(function(a){
       (a.res||[]).forEach(function(r){
-        if(!rm[r])rm[r]={name:r,wos:{},acts:0,lh:0,actual_lh:0,nc:0,peak_hc:0};
+        if(!rm[r])rm[r]={name:r,wos:{},acts:0,lh:0,actual_lh:0,nc:0};
         rm[r].wos[wo.id]=true; rm[r].acts++;
         rm[r].lh+=a.plan_lh||0; rm[r].actual_lh+=a.actual_lh||0;
-        if(a.fd!=null&&a.fd<=3&&!EXCLUDE_CP[a.id])rm[r].nc++;
-        // Peak headcount from histogram
-        var hist=RES_HIST[r];
-        if(hist){
-          var peak=0; hist.forEach(function(d){if(d.hc>peak)peak=d.hc;});
-          rm[r].peak_hc=Math.round(peak*10)/10;
-        }
+        if(a.fd!=null&&a.fd<=3&&!EXCLUDE_CP[a.id])rm[r].nc++;}
       });
     });
   });
@@ -472,7 +457,7 @@ function buildResData(){
     var r=rm[keys[i]];
     RES_DATA.push({name:r.name,wo_count:Object.keys(r.wos).length,wos:Object.keys(r.wos),
                    acts:r.acts,lh:Math.round(r.lh),actual_lh:Math.round(r.actual_lh),
-                   nc:r.nc,peak_hc:r.peak_hc});
+                   nc:r.nc});
   }
   RES_DATA.sort(function(a,b){return b.lh-a.lh;});
   filteredRes=[].concat(RES_DATA);
@@ -668,14 +653,12 @@ function renderResTable(){
     var pct=Math.round(r.lh/maxLH*100);
     var apct=r.lh>0?Math.min(100,Math.round(r.actual_lh/r.lh*100)):0;
     var ncCell=r.nc?'<span class="badge b-nc">'+r.nc+'</span>':'<span style="color:#bbb">0</span>';
-    var peakCls=r.peak_hc>=20?'high':r.peak_hc>=10?'med':'';
     return'<tr onclick="selectRes(\''+r.name+'\')" style="cursor:pointer">'+
       '<td style="font-weight:500">'+r.name+'</td>'+
       '<td style="text-align:right">'+r.wo_count+'</td>'+
       '<td style="text-align:right">'+r.acts.toLocaleString()+'</td>'+
       '<td style="text-align:right">'+r.lh.toLocaleString()+'</td>'+
       '<td style="text-align:right">'+r.actual_lh.toLocaleString()+(r.lh>0?'<div class="prog-bar"><div class="prog-fill" style="width:'+apct+'%;background:#1D9E75"></div></div>':'')+'</td>'+
-      '<td style="text-align:right"><span class="hc-badge '+peakCls+'">'+r.peak_hc+'</span></td>'+
       '<td style="text-align:center">'+ncCell+'</td>'+
       '<td><div style="height:8px;background:#eee;border-radius:4px;overflow:hidden;width:100px"><div style="height:100%;border-radius:4px;background:#378ADD;width:'+pct+'%"></div></div></td>'+
       '</tr>';
@@ -741,7 +724,6 @@ function renderResHistogram(){
   // Stats
   document.getElementById('hist-title').textContent=(resName==='ALL'?'All resources combined':resName)+' — headcount per day';
   document.getElementById('hist-stats').innerHTML=
-    '<div class="stat"><div class="stat-label">Peak headcount</div><div class="stat-val danger">'+peak+'</div></div>'+
     '<div class="stat"><div class="stat-label">Peak day</div><div class="stat-val sm">'+(peakDay?fmtD(peakDay):'—')+'</div></div>'+
     (cap>0?'<div class="stat"><div class="stat-label">Overloaded days</div><div class="stat-val '+(overloadDays>0?'danger':'ok')+'">'+overloadDays+'</div></div>':'')+
     '<div class="stat"><div class="stat-label">Avg headcount</div><div class="stat-val">'+(days.length?Math.round(totalHC/days.length*10)/10:0)+'</div></div>';
@@ -892,29 +874,29 @@ function renderCPTable(){
 // ---- S-curves ----
 var SC_CFG={
   lh:{title:'Labor hours — planned vs actual (cumulative S-curve)',
-      sub:'Cumulative planned and actual labor hours · TAR window '+TAR_START_STR+' – '+TAR_END_STR,
+      sub:'Cumulative planned and actual labor hours · full schedule (Apr 2026 – Jul 2026)',
       legend:[{c:'#1E3A5F',l:'Planned hrs'},{c:'#1D9E75',l:'Actual hrs'}],
       ds:function(pts){return[
         {label:'Planned hrs',data:pts.map(function(p){return p.plan_lh;}),borderColor:'#1E3A5F',backgroundColor:'rgba(30,58,95,.07)',fill:true,tension:.35,pointRadius:0,borderWidth:2.5},
         {label:'Actual hrs',data:pts.map(function(p){return p.actual_lh;}),borderColor:'#1D9E75',backgroundColor:'rgba(29,158,117,.07)',fill:true,tension:.35,pointRadius:2,borderWidth:2.5}
       ];}},
   acts:{title:'Activity completions — planned vs actual (cumulative)',
-        sub:'Cumulative count of activities planned and marked complete · TAR window',
+        sub:'Cumulative count of activities planned and marked complete · full schedule',
         legend:[{c:'#378ADD',l:'Planned complete'},{c:'#EF9F27',l:'Actual complete'}],
         ds:function(pts){return[
           {label:'Planned complete',data:pts.map(function(p){return p.plan_acts;}),borderColor:'#378ADD',backgroundColor:'rgba(55,138,221,.07)',fill:true,tension:.35,pointRadius:0,borderWidth:2.5},
           {label:'Actual complete',data:pts.map(function(p){return p.actual_acts;}),borderColor:'#EF9F27',backgroundColor:'rgba(239,159,39,.07)',fill:true,tension:.35,pointRadius:2,borderWidth:2.5}
         ];}},
   cp:{title:'Critical path activities — planned vs actual (cumulative)',
-      sub:'Near-critical activities (≤3d float) · A43060 and A23330 excluded · 65 activities tracked',
+      sub:'Near-critical activities (≤3d float) · A43060 and A23330 excluded · full schedule',
       legend:[{c:'#A32D2D',l:'Planned CP complete'},{c:'#E24B4A',l:'Actual CP complete'}],
       ds:function(pts){return[
         {label:'Planned CP',data:pts.map(function(p){return p.plan_cp;}),borderColor:'#A32D2D',backgroundColor:'rgba(163,45,45,.07)',fill:true,tension:.35,pointRadius:0,borderWidth:2.5},
         {label:'Actual CP',data:pts.map(function(p){return p.actual_cp||0;}),borderColor:'#E24B4A',backgroundColor:'rgba(226,75,74,.07)',fill:true,tension:.35,pointRadius:2,borderWidth:2.5}
       ];}},
-  hist:{title:'Activities per day — baseline histogram',
-        sub:'Activities planned to complete each day · bars = daily count · line = 5-day rolling average',
-        legend:[{c:'rgba(181,212,244,.85)',l:'Activities completing'},{c:'#185FA5',l:'5-day rolling avg'}],
+  hist:{title:'Activities per day — planned vs actual',
+        sub:'Activities planned vs actually completing each day · click any bar to see detail',
+        legend:[{c:'rgba(55,138,221,.6)',l:'Planned'},{c:'rgba(29,158,117,.8)',l:'Actual'},{c:'#185FA5',l:'5-day rolling avg (plan)'}],
         mixed:true},
   float:{title:'Schedule float — burn-down',
          sub:'Average remaining float (days) across all TAR activities over the window',
@@ -926,68 +908,75 @@ var SC_CFG={
 
 
 function computeLiveCharts(){
-  // Flatten all activities from live data
+  // Flatten ALL activities from live data
   var acts=[];
   allWO.forEach(function(wo){
-    (wo.acts||[]).forEach(function(a){
-      acts.push(a);
-    });
+    (wo.acts||[]).forEach(function(a){ acts.push(a); });
   });
+
+  if(!acts.length) return;
 
   // Get full date range from live data
   var minStart=null, maxFinish=null;
   acts.forEach(function(a){
-    if(a.start&&(!minStart||a.start<minStart)) minStart=a.start;
-    if(a.finish&&(!maxFinish||a.finish>maxFinish)) maxFinish=a.finish;
+    if(a.start&&a.start.length>=10){
+      var s=a.start.slice(0,10);
+      if(!minStart||s<minStart) minStart=s;
+    }
+    if(a.finish&&a.finish.length>=10){
+      var f=a.finish.slice(0,10);
+      if(!maxFinish||f>maxFinish) maxFinish=f;
+    }
   });
-  var overallStart=minStart?minStart.slice(0,10):'2026-04-13';
-  var overallEnd=maxFinish?maxFinish.slice(0,10):'2026-07-03';
+  var overallStart=minStart||'2026-04-13';
+  var overallEnd=maxFinish||'2026-07-03';
 
-  // Build TAR window day list
-  var tarDays=buildDayList(TAR_START_STR, TAR_END_STR);
+  // Build FULL schedule day list (April to July)
+  var allDays=buildDayList(overallStart,overallEnd);
 
-  // Initialise per-day buckets
-  var planLHByDay={}, planActByDay={}, actualLHByDay={}, actualActByDay={}, histByDay={}, cpByDay={};
-  tarDays.forEach(function(dk){
+  // Buckets for every day in full range
+  var planLHByDay={}, planActByDay={}, actualLHByDay={}, actualActByDay={};
+  var histByDay={}, cpByDay={}, actualCPByDay={};
+  allDays.forEach(function(dk){
     planLHByDay[dk]=0; planActByDay[dk]=0;
     actualLHByDay[dk]=0; actualActByDay[dk]=0;
-    histByDay[dk]=0; cpByDay[dk]=0;
+    histByDay[dk]=0; cpByDay[dk]=0; actualCPByDay[dk]=0;
   });
 
   var totalPlanLH=0, totalActs=0, totalCPActs=0;
-  var tarActsFloat=[];
 
   acts.forEach(function(a){
     if(isMilestone(a.id,a.name)) return;
     totalPlanLH+=a.plan_lh||0;
     totalActs++;
-
     var isCP=a.fd!=null&&a.fd<=3&&!EXCLUDE_CP[a.id];
     if(isCP) totalCPActs++;
 
-    if(!a.start||!a.finish) return;
-    var sd=a.start.slice(0,10), fd=a.finish.slice(0,10);
+    var sd=a.start?a.start.slice(0,10):'';
+    var fd=a.finish?a.finish.slice(0,10):'';
+    if(!sd||!fd) return;
 
-    // Histogram: count by finish date in TAR window
+    // Histogram: count by finish date
     if(histByDay.hasOwnProperty(fd)) histByDay[fd]++;
     if(planActByDay.hasOwnProperty(fd)) planActByDay[fd]++;
     if(isCP&&cpByDay.hasOwnProperty(fd)) cpByDay[fd]++;
 
-    // Float pool for TAR window
-    if(a.fd!=null&&fd>=TAR_START_STR&&fd<=TAR_END_STR){
-      tarActsFloat.push(a);
+    // Actual completions
+    var isComplete=(a.pct>=100||a.status==='Complete');
+    if(isComplete&&actualActByDay.hasOwnProperty(fd)) actualActByDay[fd]++;
+    if(isCP&&isComplete&&actualCPByDay.hasOwnProperty(fd)) actualCPByDay[fd]++;
+
+    // Actual hours on finish date
+    if(a.actual_lh>0&&actualLHByDay.hasOwnProperty(fd)){
+      actualLHByDay[fd]+=a.actual_lh;
     }
 
-    // Distribute planned labor across TAR portion of activity
+    // Distribute planned labor across activity duration
+    var sDate=new Date(sd+'T00:00:00');
+    var fDate=new Date(fd+'T00:00:00');
     var actDays=[];
-    var cur=new Date(sd+'T00:00:00');
-    var end=new Date(fd+'T00:00:00');
-    var tarS=new Date(TAR_START_STR+'T00:00:00');
-    var tarE=new Date(TAR_END_STR+'T00:00:00');
-    var iterStart=cur<tarS?tarS:cur;
-    var iterEnd=end>tarE?tarE:end;
-    var d=new Date(iterStart.getTime());
-    while(d<=iterEnd){
+    var d=new Date(sDate.getTime());
+    while(d<=fDate){
       var k=fmtDateJS(d);
       if(planLHByDay.hasOwnProperty(k)) actDays.push(k);
       d.setDate(d.getDate()+1);
@@ -996,41 +985,55 @@ function computeLiveCharts(){
       var lhd=(a.plan_lh||0)/actDays.length;
       actDays.forEach(function(k){planLHByDay[k]+=lhd;});
     }
-
-    // Actual hours on finish date
-    if(a.actual_lh>0&&actualLHByDay.hasOwnProperty(fd)){
-      actualLHByDay[fd]+=a.actual_lh;
-    }
-    // Actual completions
-    if((a.pct>=100||a.status==='Complete')&&actualActByDay.hasOwnProperty(fd)){
-      actualActByDay[fd]++;
-    }
   });
 
-  // Build cumulative chart points
-  var cumPLH=0,cumALH=0,cumPA=0,cumAA=0,cumCP=0;
-  var pts=tarDays.map(function(dk){
+  // Float pool for burn-down (TAR window only)
+  var tarActsFloat=acts.filter(function(a){
+    return a.fd!=null&&a.finish&&
+           a.finish.slice(0,10)>=TAR_START_STR&&
+           a.finish.slice(0,10)<=TAR_END_STR&&
+           !isMilestone(a.id,a.name);
+  });
+
+  // Build cumulative chart points over FULL date range
+  var cumPLH=0,cumALH=0,cumPA=0,cumAA=0,cumCP=0,cumACP=0;
+  var pts=allDays.map(function(dk){
     cumPLH+=planLHByDay[dk]||0;
     cumALH+=actualLHByDay[dk]||0;
     cumPA+=planActByDay[dk]||0;
     cumAA+=actualActByDay[dk]||0;
     cumCP+=cpByDay[dk]||0;
+    cumACP+=actualCPByDay[dk]||0;
+
+    // Float burn-down
     var dayDate=new Date(dk+'T00:00:00');
-    var rem=tarActsFloat.filter(function(a){return new Date(a.finish.slice(0,10)+'T00:00:00')>=dayDate;});
+    var rem=tarActsFloat.filter(function(a){
+      return new Date(a.finish.slice(0,10)+'T00:00:00')>=dayDate;
+    });
     var avgFloat=null;
     if(rem.length>0){
-      var sf=0; rem.forEach(function(a){if(a.fd!=null)sf+=a.fd;}); avgFloat=Math.round(sf/rem.length*10)/10;
+      var sf=0; rem.forEach(function(a){if(a.fd!=null)sf+=a.fd;});
+      avgFloat=Math.round(sf/rem.length*10)/10;
     }
-    return{date:dk,label:dk.slice(8)+'/'+dk.slice(5,7),
-           plan_lh:Math.round(cumPLH),actual_lh:Math.round(cumALH),
-           plan_acts:cumPA,actual_acts:cumAA,
-           plan_cp:cumCP,actual_cp:0,
-           hist:histByDay[dk]||0,avg_float:avgFloat};
+
+    return{
+      date:dk,
+      label:dk.slice(8)+'/'+dk.slice(5,7),
+      plan_lh:Math.round(cumPLH),
+      actual_lh:Math.round(cumALH),
+      plan_acts:cumPA,
+      actual_acts:cumAA,
+      plan_cp:cumCP,
+      actual_cp:cumACP,
+      hist:histByDay[dk]||0,
+      actual_hist:actualActByDay[dk]||0,
+      avg_float:dk>=TAR_START_STR&&dk<=TAR_END_STR?avgFloat:null
+    };
   });
 
   window.chartPoints=pts;
 
-  // Update meta
+  // Update live meta
   window.liveMeta={
     total_plan_lh:Math.round(totalPlanLH),
     total_plan_acts:totalActs,
@@ -1041,15 +1044,16 @@ function computeLiveCharts(){
 
   // Build resource histogram from live data
   var liveHist={};
-  var fullDays=buildDayList(overallStart,overallEnd);
   allWO.forEach(function(wo){
     (wo.acts||[]).forEach(function(a){
       if(isMilestone(a.id,a.name)||!a.start||!a.finish||!a.res||!a.res.length) return;
       var durH=a.dur_h||parseDurH(a.dur,a.start);
       if(!durH||durH<=0) return;
-      var hcPerRes=Math.round(calcHC(a.plan_lh,durH)/a.res.length*100)/100;
-      if(!hcPerRes) return;
-      var sd=a.start.slice(0,10), fd=a.finish.slice(0,10);
+      var hcTotal=calcHC(a.plan_lh,durH);
+      if(!hcTotal) return;
+      var hcPerRes=Math.round(hcTotal/a.res.length*100)/100;
+      var sd=a.start.slice(0,10);
+      var fd=a.finish.slice(0,10);
       var d=new Date(sd+'T00:00:00');
       var end=new Date(fd+'T00:00:00');
       while(d<=end){
@@ -1063,7 +1067,6 @@ function computeLiveCharts(){
     });
   });
 
-  // Convert to array format matching RES_HIST
   window.liveResHist={};
   Object.keys(liveHist).forEach(function(r){
     window.liveResHist[r]=Object.keys(liveHist[r]).sort().map(function(dk){
@@ -1073,12 +1076,7 @@ function computeLiveCharts(){
 
   // Update peak headcount in RES_DATA
   RES_DATA.forEach(function(r){
-    var hist=window.liveResHist[r.name];
-    if(hist&&hist.length){
-      var peak=0;
-      hist.forEach(function(d){if(d.hc>peak)peak=d.hc;});
-      r.peak_hc=Math.round(peak*10)/10;
-    }
+
   });
 }
 
@@ -1124,17 +1122,19 @@ function renderSC(key){
   var ctx=document.getElementById('sc-canvas').getContext('2d');
   var labels=pts.map(function(p){return p.label;});
   if(cfg.mixed){
-    var hist=pts.map(function(p){return p.hist;});
+    var planHist=pts.map(function(p){return p.hist||0;});
+    var actHist=pts.map(function(p){return p.actual_hist||0;});
     var rolling=pts.map(function(_,i){
-      var slice=hist.slice(Math.max(0,i-2),i+3);
+      var slice=planHist.slice(Math.max(0,i-2),i+3);
       return Math.round(slice.reduce(function(s,v){return s+v;},0)/slice.length);
     });
     activeScChart=new Chart(ctx,{data:{labels:labels,datasets:[
-      {type:'bar',label:'Activities',data:hist,backgroundColor:'rgba(181,212,244,.85)',borderColor:'#378ADD',borderWidth:1,borderRadius:3},
-      {type:'line',label:'5-day avg',data:rolling,borderColor:'#185FA5',backgroundColor:'transparent',borderWidth:2.5,tension:.4,pointRadius:0}
+      {type:'bar',label:'Planned',data:planHist,backgroundColor:'rgba(55,138,221,.5)',borderColor:'#378ADD',borderWidth:1,borderRadius:2},
+      {type:'bar',label:'Actual',data:actHist,backgroundColor:'rgba(29,158,117,.8)',borderColor:'#1D9E75',borderWidth:1,borderRadius:2},
+      {type:'line',label:'5-day avg (plan)',data:rolling,borderColor:'#185FA5',backgroundColor:'transparent',borderWidth:2,tension:.4,pointRadius:0}
     ]},options:{responsive:true,maintainAspectRatio:false,
       plugins:{legend:{display:false},tooltip:{mode:'index',intersect:false}},
-      scales:{x:{grid:{color:'rgba(0,0,0,.05)'},ticks:{font:{size:11}}},
+      scales:{x:{grid:{color:'rgba(0,0,0,.05)'},ticks:{font:{size:11},maxRotation:45,autoSkip:true,maxTicksLimit:30}},
               y:{beginAtZero:true,grid:{color:'rgba(0,0,0,.05)'},ticks:{font:{size:11}},title:{display:true,text:'Activities per day',font:{size:11}}}}}});
     return;
   }
