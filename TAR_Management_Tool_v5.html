@@ -448,7 +448,7 @@ function buildResData(){
         if(!rm[r])rm[r]={name:r,wos:{},acts:0,lh:0,actual_lh:0,nc:0};
         rm[r].wos[wo.id]=true; rm[r].acts++;
         rm[r].lh+=a.plan_lh||0; rm[r].actual_lh+=a.actual_lh||0;
-        if(a.fd!=null&&a.fd<=3&&!EXCLUDE_CP[a.id])rm[r].nc++;}
+        if(a.fd!=null&&a.fd<=3&&!EXCLUDE_CP[a.id])rm[r].nc++;
       });
     });
   });
