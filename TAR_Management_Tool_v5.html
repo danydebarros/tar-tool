@@ -442,9 +442,9 @@ function loadData(payload){
       if(p){p.actual_lh=lp.actual_lh||0;p.actual_acts=lp.actual_acts||0;p.actual_cp=lp.actual_cp||0;}
     });
   }
-  window.chartPoints=pts;
+  // Rebuild ALL charts from live data
+  computeLiveCharts();
   buildSCStats(); renderSC(activeSC);
-  // Update resource histogram with live headcount if available
   renderResHistogram();
 }
 
@@ -721,13 +721,13 @@ function renderResHistogram(){
   var dayMap={};
   days.forEach(function(dk){dayMap[dk]=0;});
 
+  var activeHist=window.liveResHist||RES_HIST;
   if(resName==='ALL'){
-    // Sum all resources
-    Object.keys(RES_HIST).forEach(function(r){
-      RES_HIST[r].forEach(function(p){if(dayMap.hasOwnProperty(p.date))dayMap[p.date]+=p.hc;});
+    Object.keys(activeHist).forEach(function(r){
+      activeHist[r].forEach(function(p){if(dayMap.hasOwnProperty(p.date))dayMap[p.date]+=p.hc;});
     });
   } else {
-    var hist=RES_HIST[resName]||[];
+    var hist=activeHist[resName]||[];
     hist.forEach(function(p){if(dayMap.hasOwnProperty(p.date))dayMap[p.date]=p.hc;});
   }
 
@@ -924,14 +924,186 @@ var SC_CFG={
          ];},yMin:0,yLabel:'Float (days)'}
 };
 
+
+function computeLiveCharts(){
+  // Flatten all activities from live data
+  var acts=[];
+  allWO.forEach(function(wo){
+    (wo.acts||[]).forEach(function(a){
+      acts.push(a);
+    });
+  });
+
+  // Get full date range from live data
+  var minStart=null, maxFinish=null;
+  acts.forEach(function(a){
+    if(a.start&&(!minStart||a.start<minStart)) minStart=a.start;
+    if(a.finish&&(!maxFinish||a.finish>maxFinish)) maxFinish=a.finish;
+  });
+  var overallStart=minStart?minStart.slice(0,10):'2026-04-13';
+  var overallEnd=maxFinish?maxFinish.slice(0,10):'2026-07-03';
+
+  // Build TAR window day list
+  var tarDays=buildDayList(TAR_START_STR, TAR_END_STR);
+
+  // Initialise per-day buckets
+  var planLHByDay={}, planActByDay={}, actualLHByDay={}, actualActByDay={}, histByDay={}, cpByDay={};
+  tarDays.forEach(function(dk){
+    planLHByDay[dk]=0; planActByDay[dk]=0;
+    actualLHByDay[dk]=0; actualActByDay[dk]=0;
+    histByDay[dk]=0; cpByDay[dk]=0;
+  });
+
+  var totalPlanLH=0, totalActs=0, totalCPActs=0;
+  var tarActsFloat=[];
+
+  acts.forEach(function(a){
+    if(isMilestone(a.id,a.name)) return;
+    totalPlanLH+=a.plan_lh||0;
+    totalActs++;
+
+    var isCP=a.fd!=null&&a.fd<=3&&!EXCLUDE_CP[a.id];
+    if(isCP) totalCPActs++;
+
+    if(!a.start||!a.finish) return;
+    var sd=a.start.slice(0,10), fd=a.finish.slice(0,10);
+
+    // Histogram: count by finish date in TAR window
+    if(histByDay.hasOwnProperty(fd)) histByDay[fd]++;
+    if(planActByDay.hasOwnProperty(fd)) planActByDay[fd]++;
+    if(isCP&&cpByDay.hasOwnProperty(fd)) cpByDay[fd]++;
+
+    // Float pool for TAR window
+    if(a.fd!=null&&fd>=TAR_START_STR&&fd<=TAR_END_STR){
+      tarActsFloat.push(a);
+    }
+
+    // Distribute planned labor across TAR portion of activity
+    var actDays=[];
+    var cur=new Date(sd+'T00:00:00');
+    var end=new Date(fd+'T00:00:00');
+    var tarS=new Date(TAR_START_STR+'T00:00:00');
+    var tarE=new Date(TAR_END_STR+'T00:00:00');
+    var iterStart=cur<tarS?tarS:cur;
+    var iterEnd=end>tarE?tarE:end;
+    var d=new Date(iterStart.getTime());
+    while(d<=iterEnd){
+      var k=fmtDateJS(d);
+      if(planLHByDay.hasOwnProperty(k)) actDays.push(k);
+      d.setDate(d.getDate()+1);
+    }
+    if(actDays.length>0){
+      var lhd=(a.plan_lh||0)/actDays.length;
+      actDays.forEach(function(k){planLHByDay[k]+=lhd;});
+    }
+
+    // Actual hours on finish date
+    if(a.actual_lh>0&&actualLHByDay.hasOwnProperty(fd)){
+      actualLHByDay[fd]+=a.actual_lh;
+    }
+    // Actual completions
+    if((a.pct>=100||a.status==='Complete')&&actualActByDay.hasOwnProperty(fd)){
+      actualActByDay[fd]++;
+    }
+  });
+
+  // Build cumulative chart points
+  var cumPLH=0,cumALH=0,cumPA=0,cumAA=0,cumCP=0;
+  var pts=tarDays.map(function(dk){
+    cumPLH+=planLHByDay[dk]||0;
+    cumALH+=actualLHByDay[dk]||0;
+    cumPA+=planActByDay[dk]||0;
+    cumAA+=actualActByDay[dk]||0;
+    cumCP+=cpByDay[dk]||0;
+    var dayDate=new Date(dk+'T00:00:00');
+    var rem=tarActsFloat.filter(function(a){return new Date(a.finish.slice(0,10)+'T00:00:00')>=dayDate;});
+    var avgFloat=null;
+    if(rem.length>0){
+      var sf=0; rem.forEach(function(a){if(a.fd!=null)sf+=a.fd;}); avgFloat=Math.round(sf/rem.length*10)/10;
+    }
+    return{date:dk,label:dk.slice(8)+'/'+dk.slice(5,7),
+           plan_lh:Math.round(cumPLH),actual_lh:Math.round(cumALH),
+           plan_acts:cumPA,actual_acts:cumAA,
+           plan_cp:cumCP,actual_cp:0,
+           hist:histByDay[dk]||0,avg_float:avgFloat};
+  });
+
+  window.chartPoints=pts;
+
+  // Update meta
+  window.liveMeta={
+    total_plan_lh:Math.round(totalPlanLH),
+    total_plan_acts:totalActs,
+    total_cp_acts:totalCPActs,
+    overall_start:overallStart,
+    overall_end:overallEnd
+  };
+
+  // Build resource histogram from live data
+  var liveHist={};
+  var fullDays=buildDayList(overallStart,overallEnd);
+  allWO.forEach(function(wo){
+    (wo.acts||[]).forEach(function(a){
+      if(isMilestone(a.id,a.name)||!a.start||!a.finish||!a.res||!a.res.length) return;
+      var durH=a.dur_h||parseDurH(a.dur,a.start);
+      if(!durH||durH<=0) return;
+      var hcPerRes=Math.round(calcHC(a.plan_lh,durH)/a.res.length*100)/100;
+      if(!hcPerRes) return;
+      var sd=a.start.slice(0,10), fd=a.finish.slice(0,10);
+      var d=new Date(sd+'T00:00:00');
+      var end=new Date(fd+'T00:00:00');
+      while(d<=end){
+        var dk=fmtDateJS(d);
+        a.res.forEach(function(r){
+          if(!liveHist[r]) liveHist[r]={};
+          liveHist[r][dk]=(liveHist[r][dk]||0)+hcPerRes;
+        });
+        d.setDate(d.getDate()+1);
+      }
+    });
+  });
+
+  // Convert to array format matching RES_HIST
+  window.liveResHist={};
+  Object.keys(liveHist).forEach(function(r){
+    window.liveResHist[r]=Object.keys(liveHist[r]).sort().map(function(dk){
+      return{date:dk,hc:Math.round(liveHist[r][dk]*10)/10};
+    });
+  });
+
+  // Update peak headcount in RES_DATA
+  RES_DATA.forEach(function(r){
+    var hist=window.liveResHist[r.name];
+    if(hist&&hist.length){
+      var peak=0;
+      hist.forEach(function(d){if(d.hc>peak)peak=d.hc;});
+      r.peak_hc=Math.round(peak*10)/10;
+    }
+  });
+}
+
+function buildDayList(startStr,endStr){
+  var days=[];
+  var d=new Date(startStr+'T00:00:00');
+  var end=new Date(endStr+'T00:00:00');
+  while(d<=end){days.push(fmtDateJS(d));d.setDate(d.getDate()+1);}
+  return days;
+}
+
+function fmtDateJS(d){
+  var mo=d.getMonth()+1,dy=d.getDate();
+  return d.getFullYear()+'-'+(mo<10?'0'+mo:mo)+'-'+(dy<10?'0'+dy:dy);
+}
+
 function buildSCStats(){
   var pts=window.chartPoints||CHART_DATA;
   var last=pts[pts.length-1]||{};
+  var meta=window.liveMeta||CHART_META;
   document.getElementById('sc-stats').innerHTML=
-    '<div class="stat"><div class="stat-label">Total plan hrs</div><div class="stat-val info">'+CHART_META.total_plan_lh.toLocaleString()+'</div></div>'+
+    '<div class="stat"><div class="stat-label">Total plan hrs</div><div class="stat-val info">'+meta.total_plan_lh.toLocaleString()+'</div></div>'+
     '<div class="stat"><div class="stat-label">Actual hrs to date</div><div class="stat-val">'+(last.actual_lh||0).toLocaleString()+'</div></div>'+
-    '<div class="stat"><div class="stat-label">Plan acts (TAR)</div><div class="stat-val">'+CHART_META.total_plan_acts.toLocaleString()+'</div></div>'+
-    '<div class="stat"><div class="stat-label">Critical path acts</div><div class="stat-val danger">'+CHART_META.total_cp_acts+'</div></div>'+
+    '<div class="stat"><div class="stat-label">Plan acts (TAR)</div><div class="stat-val">'+meta.total_plan_acts.toLocaleString()+'</div></div>'+
+    '<div class="stat"><div class="stat-label">Critical path acts</div><div class="stat-val danger">'+meta.total_cp_acts+'</div></div>'+
     '<div class="stat"><div class="stat-label">Actual complete</div><div class="stat-val">'+(last.actual_acts||0).toLocaleString()+'</div></div>';
 }
 function selectSC(key,btn){
